@@ -1,0 +1,15 @@
+:root {
+  --bg: #0f1218; --panel: #171c26; --line: #262d3b; --text: #e6e9ef; --dim: #8a93a6;
+  --up: #26a69a; --down: #ef5350; --accent: #f5b942;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--dim); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.primary { background: var(--accent); color: #1a1405; border-color: var(--accent); font-weight: 600; }
+button.buy { background: var(--up); border-color: var(--up); color: #04201d; font-weight: 600; }
+button.sell { background: var(--down); border-color: var(--down); color: #2b0a09; font-weight: 600; }
+button.on { border-color: var(--accent); color: var(--accent); }
+.up { color: var(--up); } .down { color: var(--down); } .dim { color: var(--dim); }
