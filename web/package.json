@@ -8,7 +8,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "gen:sample": "node scripts/gen-sample-data.mjs"
+    "gen:sample": "node scripts/gen-sample-data.mjs",
+    "fetch:binance": "node scripts/fetch-binance.mjs"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",

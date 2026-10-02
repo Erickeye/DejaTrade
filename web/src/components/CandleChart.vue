@@ -11,7 +11,9 @@ let markers: ISeriesMarkersPluginApi<Time> | null = null
 let drawn = 0
 let markerCount = 0
 
-const bar = (c: Candle) => ({ time: c.t as UTCTimestamp, open: c.o, high: c.h, low: c.l, close: c.c })
+let k = 1
+let base = 0
+const bar = (c: Candle) => ({ time: (base + c.t) as UTCTimestamp, open: c.o * k, high: c.h * k, low: c.l * k, close: c.c * k })
 
 onMounted(() => {
   chart = createChart(el.value!, {
@@ -37,14 +39,16 @@ function reset() {
 }
 
 /** 把遊戲目前狀態畫上去（只補新增的部分） */
-function sync(g: Game) {
+function sync(g: Game, scale = 1, baseSec = 0) {
   if (!series) return
+  k = scale
+  base = baseSec
   for (; drawn < g.candleIndex; drawn++) series.update(bar(g.candles[drawn]!))
   series.update(bar(g.current))
   if (g.trades.length !== markerCount) {
     markerCount = g.trades.length
     const list: SeriesMarker<Time>[] = g.trades.map((t) => ({
-      time: g.candles[t.candleIndex]!.t as UTCTimestamp,
+      time: (base + g.candles[t.candleIndex]!.t) as UTCTimestamp,
       position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
       shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
       color: t.side === 'buy' ? '#26a69a' : '#ef5350',

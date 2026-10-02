@@ -28,7 +28,7 @@ export interface DayFile {
 
 export interface DayIndex {
   version: number
-  days: { id: string; asset: string; file: string }[]
+  days: { id: string; asset: string; symbol?: string; synthetic?: boolean; file: string }[]
 }
 
 export type Side = 'buy' | 'sell'

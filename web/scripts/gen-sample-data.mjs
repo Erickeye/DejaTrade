@@ -52,7 +52,7 @@ for (let d = 0; d < DAYS; d++) {
     candles,
   }
   writeFileSync(new URL(`days/crypto/${id}.json`, OUT), JSON.stringify(day))
-  index.days.push({ id, asset: 'crypto', file: `days/crypto/${id}.json` })
+  index.days.push({ id, asset: 'crypto', symbol: day.meta.symbol, synthetic: true, file: `days/crypto/${id}.json` })
 }
 writeFileSync(new URL('index.json', OUT), JSON.stringify(index, null, 1))
 console.log(`已產生 ${DAYS} 個合成交易日 → public/data/`)

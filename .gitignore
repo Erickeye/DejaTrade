@@ -3,3 +3,6 @@ node_modules/
 bin/
 obj/
 dist/
+
+# 市場資料：授權確認前不進版控（用 npm run fetch:binance / gen:sample 產生）
+web/public/data/
