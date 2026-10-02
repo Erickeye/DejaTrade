@@ -18,7 +18,9 @@ export function ticksForCandle(c: Candle, n: number, rng: Rng): number[] {
     const a = waypoints[seg]!
     const b = waypoints[seg + 1]!
     // 加一點小雜訊讓跳動不呆板，但不超出影線範圍
-    const noise = i === n ? 0 : (rng() - 0.5) * (c.h - c.l) * 0.1
+    // 轉折點（H / L）與收盤不加雜訊，確保真實高低點會被走到
+    const onWaypoint = Math.abs(pos - Math.round(pos)) < 1e-9
+    const noise = onWaypoint ? 0 : (rng() - 0.5) * (c.h - c.l) * 0.1
     const p = a + (b - a) * f + noise
     out.push(Math.min(c.h, Math.max(c.l, p)))
   }
