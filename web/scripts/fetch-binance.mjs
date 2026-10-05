@@ -3,7 +3,7 @@
 //   npm run fetch:binance
 //   npm run fetch:binance -- --from 2025-01-01 --to 2026-09-30 --per 15 --symbols BTCUSDT,ETHUSDT,SOLUSDT
 // 注意：公開散布前請先確認 Binance 資料使用條款（見 PROJECT_BRIEF 4.2）。
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { inflateRawSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
@@ -48,13 +48,13 @@ export function parseKlines(csv) {
 const round = (x, d) => Math.round(x * 10 ** d) / 10 ** d
 
 /** 品質篩選 + 正規化；不合格回傳 null */
-export function buildDay(rows, dateStr) {
+export function buildDay(rows, dateStr, { minCandles = MIN_CANDLES, minRangePct = MIN_RANGE_PCT, requireVolume = true } = {}) {
   const dayStart = Date.parse(dateStr + 'T00:00:00Z')
   const r = rows.filter((x) => x.t >= dayStart && x.t < dayStart + 86400000)
-  if (r.length < MIN_CANDLES) return null
+  if (r.length < minCandles) return null
   const hi = Math.max(...r.map((x) => x.h)), lo = Math.min(...r.map((x) => x.l))
-  if (((hi - lo) / r[0].o) * 100 < MIN_RANGE_PCT) return null
-  if (r.reduce((s, x) => s + x.v, 0) <= 0) return null
+  if (((hi - lo) / r[0].o) * 100 < minRangePct) return null
+  if (requireVolume && r.reduce((s, x) => s + x.v, 0) <= 0) return null
   const scale = r[0].o
   const k = 100 / scale
   return {
@@ -63,7 +63,16 @@ export function buildDay(rows, dateStr) {
   }
 }
 
-function rng(seed) {
+/** 讀取既有 index.json 的 days（不存在則回傳空陣列） */
+export function readIndex(OUT) {
+  try {
+    return JSON.parse(readFileSync(new URL('index.json', OUT), 'utf8')).days ?? []
+  } catch {
+    return []
+  }
+}
+
+export function rng(seed) {
   let a = seed >>> 0
   return () => {
     a = (a + 0x6d2b79f5) >>> 0
@@ -101,10 +110,12 @@ async function main() {
   if (!(days > 0)) throw new Error('日期區間不正確')
 
   const OUT = new URL('../public/data/', import.meta.url)
-  rmSync(new URL('days/', OUT), { recursive: true, force: true })
+  rmSync(new URL('days/crypto/', OUT), { recursive: true, force: true })
   mkdirSync(new URL('days/crypto/', OUT), { recursive: true })
 
-  const index = { version: 1, days: [] }
+  // 保留其他資產類別（例如外匯）的既有索引，只替換加密貨幣
+  const index = { version: 1, days: readIndex(OUT).filter((d) => d.asset !== 'crypto') }
+  const keep = index.days.length
   const rand = rng(20261002)
   let n = 0
   for (const symbol of symbols) {
@@ -133,10 +144,10 @@ async function main() {
     process.stdout.write('\n')
     if (got < per) console.warn(`警告：${symbol} 只湊到 ${got} 天，請放寬日期區間`)
   }
-  // 打散順序，讓索引不洩漏標的分組
-  for (let i = index.days.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [index.days[i], index.days[j]] = [index.days[j], index.days[i]]
+  // 只打散這次新增的部分，讓索引不洩漏標的分組
+  for (let i = index.days.length - 1; i > keep; i--) {
+    const j = keep + Math.floor(rand() * (i - keep + 1));
+    ;[index.days[i], index.days[j]] = [index.days[j], index.days[i]]
   }
   writeFileSync(new URL('index.json', OUT), JSON.stringify(index, null, 1))
   console.log(`完成：${index.days.length} 個交易日 → public/data/`)

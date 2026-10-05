@@ -3,7 +3,8 @@
 ```bash
 npm install
 npm run fetch:binance   # 抓 Binance 真實 1 分鐘 K 線（BTC/ETH/SOL，各 20 天）到 public/data
-npm run gen:sample      # 或：產生合成假資料（離線時用）
+npm run fetch:fx        # 抓 Dukascopy 外匯 1 分鐘 K 線（EURUSD/GBPUSD/USDJPY，各 10 天）
+npm run gen:sample      # 或：產生合成假資料（含外匯，離線時用）
 npm run dev          # 開發伺服器
 npm test             # 引擎單元測試（Vitest）
 npm run build        # 型別檢查 + 建置
@@ -16,3 +17,7 @@ npm run build        # 型別檢查 + 建置
 
 `fetch:binance` 參數：`-- --from 2025-01-01 --to 2026-09-30 --per 15 --symbols BTCUSDT,ETHUSDT,SOLUSDT`。
 `public/data/` 不進版控，clone 後需先執行其中一個資料指令。
+
+`fetch:fx` 參數：`-- --from 2025-01-01 --to 2026-09-30 --per 10 --symbols EURUSD,GBPUSD,USDJPY --weekdays 1,2,3,4`（預設只抽週一到週四，週五晚間市場收盤、K 線不完整）。
+Dukascopy 網站條款限制為個人、非商業使用，且不得再散布；`public/data/` 與 `.dukascopy-cache/` 都不進版控，請勿公開部署這些資料。
+`fetch:binance` 與 `fetch:fx` 各自只替換自己的資產類別，不會清掉對方的資料。

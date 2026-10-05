@@ -14,6 +14,14 @@ export interface DayMeta {
   scale: number
   /** 為 true 代表是開發用的合成資料，並非真實行情 */
   synthetic?: boolean
+  /** 外匯：1 pip 的價格大小（EURUSD 0.0001、USDJPY 0.01） */
+  pipSize?: number
+  /** 外匯：報價小數位數（5 或 3） */
+  digits?: number
+  /** 外匯：遊戲內模擬用的固定點差（pip） */
+  spreadPips?: number
+  /** 外匯：美元是否為報價貨幣（EURUSD 是，USDJPY 不是），用來換算手數 */
+  usdIsQuote?: boolean
 }
 
 /** 單日檔案（對應 public/data/days/**.json） */

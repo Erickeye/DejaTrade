@@ -54,5 +54,33 @@ for (let d = 0; d < DAYS; d++) {
   writeFileSync(new URL(`days/crypto/${id}.json`, OUT), JSON.stringify(day))
   index.days.push({ id, asset: 'crypto', symbol: day.meta.symbol, synthetic: true, file: `days/crypto/${id}.json` })
 }
+
+// 外匯合成資料（供沒有真實資料時測試外匯介面；格式與 fetch:fx 相同）
+mkdirSync(new URL('days/fx/', OUT), { recursive: true })
+const FX = [
+  { symbol: 'EURUSD', scale: 1.0842, pipSize: 0.0001, digits: 5, spreadPips: 0.5, usdIsQuote: true },
+  { symbol: 'GBPUSD', scale: 1.2731, pipSize: 0.0001, digits: 5, spreadPips: 0.8, usdIsQuote: true },
+  { symbol: 'USDJPY', scale: 150.215, pipSize: 0.01, digits: 3, spreadPips: 0.6, usdIsQuote: false },
+]
+let fxn = 0
+for (const cfg of FX) {
+  for (let d = 0; d < 2; d++) {
+    const r = rng(7000 + fxn * 131)
+    let p = 100, vol = 0.00007 + r() * 0.00005
+    const candles = []
+    for (let i = 0; i < N; i++) {
+      vol = Math.max(0.00003, Math.min(0.0004, vol * (1 + (r() - 0.5) * 0.08)))
+      const o = p; let h = o, l = o, path = o
+      for (let s = 0; s < 6; s++) { path *= 1 + gauss(r) * vol / Math.sqrt(6); h = Math.max(h, path); l = Math.min(l, path) }
+      p = path
+      candles.push([i * 60, round(o, 4), round(h, 4), round(l, 4), round(path, 4), round(20 + r() * 80, 2)])
+    }
+    fxn++
+    const id = `fx-${String(fxn).padStart(4, '0')}`
+    const meta = { symbol: cfg.symbol, date: `2099-02-${String(fxn).padStart(2, '0')}`, scale: cfg.scale, pipSize: cfg.pipSize, digits: cfg.digits, spreadPips: cfg.spreadPips, usdIsQuote: cfg.usdIsQuote, synthetic: true }
+    writeFileSync(new URL(`days/fx/${id}.json`, OUT), JSON.stringify({ id, asset: 'fx', interval: '1m', meta, candles }))
+    index.days.push({ id, asset: 'fx', symbol: cfg.symbol, synthetic: true, file: `days/fx/${id}.json` })
+  }
+}
 writeFileSync(new URL('index.json', OUT), JSON.stringify(index, null, 1))
 console.log(`已產生 ${DAYS} 個合成交易日 → public/data/`)

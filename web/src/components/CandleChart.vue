@@ -9,6 +9,8 @@ import type { ChartDisplay, IndicatorToggles } from './chart-options'
 const props = defineProps<{ timeframe: number; indicators: IndicatorToggles; display: ChartDisplay }>()
 const emit = defineEmits<{ (e: 'drag-bracket', kind: 'tp' | 'sl', enginePrice: number): void }>()
 
+// 顯示換算（真實價格倍率、時間基準、小數位數）。由 sync() 明確傳入，避免 props 更新晚於資料同步一拍
+const disp = ref<ChartDisplay>(props.display)
 const el = ref<HTMLDivElement>()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Series = ISeriesApi<any>
@@ -25,6 +27,8 @@ let markerCount = -1
 const lines = new Map<string, { line: IPriceLine; price: number }>()
 let drag: { kind: 'tp' | 'sl'; price: number } | null = null
 let hovering = false
+let ro: ResizeObserver | null = null
+let lastWidth = 0
 
 // ───── 圖例（十字游標 OHLC） ─────
 interface LegendRow { label: string; color: string; value: string }
@@ -46,7 +50,7 @@ const IND_STYLE: Record<string, { color: string; label: string }> = {
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: n >= 1000 ? 2 : n >= 10 ? 3 : 4 })
-const px = (n: number) => fmt(n)
+const px = (n: number) => (disp.value.digits != null ? n.toFixed(disp.value.digits) : fmt(n))
 
 function pick(key: string, v: IndicatorValues, k: number): number | undefined {
   const s = (x: number | undefined) => (x === undefined ? undefined : x * k)
@@ -64,9 +68,9 @@ function pick(key: string, v: IndicatorValues, k: number): number | undefined {
   }
 }
 
-const time = (t: number) => (props.display.base + t) as UTCTimestamp
+const time = (t: number) => (disp.value.base + t) as UTCTimestamp
 const toCandle = (b: Bar) => {
-  const k = props.display.k
+  const k = disp.value.k
   return { time: time(b.t), open: b.o * k, high: b.h * k, low: b.l * k, close: b.c * k }
 }
 const toVolume = (b: Bar) => ({ time: time(b.t), value: b.v, color: b.c >= b.o ? '#26a69a66' : '#ef535066' })
@@ -104,11 +108,19 @@ onMounted(() => {
   el.value!.addEventListener('pointerdown', onPointerDown, true)
   el.value!.addEventListener('pointermove', onHoverMove)
   buildIndicatorSeries()
+  // 容器一開始是隱藏的（v-show）：第一次顯示、寬度從 0 變成有值時要重畫一次，否則 K 線間距會被壓縮
+  ro = new ResizeObserver(() => {
+    const w = el.value?.clientWidth ?? 0
+    if (w > 0 && lastWidth === 0 && lastGame) rebuild()
+    lastWidth = w
+  })
+  ro.observe(el.value!)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragEnd)
+  ro?.disconnect()
   chart?.remove()
 })
 
@@ -153,7 +165,7 @@ const hist = (v: number | undefined, t: UTCTimestamp) =>
 function pushIndicator(key: string, v: IndicatorValues, t: UTCTimestamp, set: boolean, acc?: Record<string, object[]>) {
   const s = ind[key]
   if (!s) return
-  const val = pick(key, v, props.display.k)
+  const val = pick(key, v, disp.value.k)
   if (val === undefined) return
   const point = key === 'macdHist' ? hist(val, t) : { time: t, value: val }
   if (acc) (acc[key] ??= []).push(point)
@@ -172,7 +184,8 @@ function rebuild() {
   volume.setData([])
   for (const s of Object.values(ind)) s.setData([])
   if (!g) return
-  candle.applyOptions({ priceFormat: { type: 'price', precision: props.display.k === 1 ? 3 : g.current.c * props.display.k >= 100 ? 2 : 4, minMove: props.display.k === 1 ? 0.001 : 0.01 } })
+  const precision = disp.value.digits ?? (disp.value.k === 1 ? 3 : g.current.c * disp.value.k >= 100 ? 2 : 4)
+  candle.applyOptions({ priceFormat: { type: 'price', precision, minMove: 10 ** -precision } })
 
   const { closed, live } = builder.update(g.candles, g.candleIndex, g.current)
   const acc: Record<string, object[]> = {}
@@ -193,7 +206,7 @@ function drawLive(live: Bar) {
   volume!.update(toVolume(live))
   const v = calc.peek(live)
   for (const key of Object.keys(ind)) pushIndicator(key, v, time(live.t), false)
-  const k = props.display.k
+  const k = disp.value.k
   latest = { o: live.o * k, h: live.h * k, l: live.l * k, c: live.c * k, v: live.v, chg: live.o ? (live.c / live.o - 1) * 100 : 0 }
   if (!hovering) {
     legend.value = latest
@@ -211,8 +224,13 @@ function reset() {
 }
 
 /** 把遊戲目前狀態畫上去（只補新增的部分） */
-function sync(g: Game) {
+function sync(g: Game, d?: ChartDisplay) {
   if (!chart || !candle || !volume) return
+  if (d) {
+    const changed = d.k !== disp.value.k || d.base !== disp.value.base || d.digits !== disp.value.digits
+    disp.value = d
+    if (changed) lastGame = null // 換算變了（新的一局）→ 整張圖重畫
+  }
   if (lastGame !== g) {
     lastGame = g
     rebuild()
@@ -267,13 +285,14 @@ function clearLines() {
 }
 
 function syncLines(g: Game) {
-  const k = props.display.k
+  const k = disp.value.k
+  const size = (qty: number, normPrice: number) => (disp.value.lots ? `${disp.value.lots(qty, normPrice).toFixed(2)} 手` : fmt(Math.abs(qty) / k))
   const pnlText = (p: number) => {
     const v = g.qty * (p / k - g.avgEntry)
     return (v >= 0 ? '+' : '') + v.toFixed(2)
   }
   const holding = g.qty !== 0
-  setLine('entry', holding ? g.avgEntry * k : null, { color: '#9aa4b8', title: `${g.qty > 0 ? '多' : '空'} ${fmt(Math.abs(g.qty) / k)}`, style: LineStyle.Solid })
+  setLine('entry', holding ? g.avgEntry * k : null, { color: '#9aa4b8', title: `${g.qty > 0 ? '多' : '空'} ${size(g.qty, g.avgEntry)}`, style: LineStyle.Solid })
   if (!(drag?.kind === 'tp')) setLine('tp', holding && g.tp != null ? g.tp * k : null, { color: '#26a69a', title: g.tp != null ? `止盈 ${pnlText(g.tp * k)}` : '', width: 2 })
   if (!(drag?.kind === 'sl')) setLine('sl', holding && g.sl != null ? g.sl * k : null, { color: '#ef5350', title: g.sl != null ? `${g.trail != null ? '追蹤止損' : '止損'} ${pnlText(g.sl * k)}` : '', width: 2 })
   const lp = g.liquidationPrice
@@ -281,7 +300,7 @@ function syncLines(g: Game) {
   const ids = new Set(g.orders.map((o) => `order-${o.id}`))
   for (const key of [...lines.keys()]) if (key.startsWith('order-') && !ids.has(key)) setLine(key, null, { color: '', title: '' })
   for (const o of g.orders) {
-    setLine(`order-${o.id}`, o.price * k, { color: '#f5b942', title: `${o.type === 'limit' ? '限價' : '停損'}${o.side === 'buy' ? '買' : '賣'} ${fmt(o.qty / k)}`, style: LineStyle.SparseDotted })
+    setLine(`order-${o.id}`, o.price * k, { color: '#f5b942', title: `${o.type === 'limit' ? '限價' : '停損'}${o.side === 'buy' ? '買' : '賣'} ${size(o.qty, o.price)}`, style: LineStyle.SparseDotted })
   }
 }
 
@@ -331,7 +350,7 @@ function onDragEnd() {
   const d = drag
   drag = null
   if (!d) return
-  emit('drag-bracket', d.kind, d.price / props.display.k)
+  emit('drag-bracket', d.kind, d.price / disp.value.k)
   if (lastGame) syncLines(lastGame) // 若引擎拒絕（方向錯誤），線會回到原位
 }
 

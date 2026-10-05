@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
-import { computed, markRaw, reactive, ref, shallowRef } from 'vue'
-import { Game, OrderError, dailySeed, createRng, pickDay, pickDailyDay, toCandles } from '../engine'
+import { computed, markRaw, reactive, ref, shallowRef, watch } from 'vue'
+import { Game, OrderError, dailySeed, createRng, defaultLeverage, gameOptionsForDay, leverageOptions, lotNotionalUsd, lotsFromQty, pickDay, pickDailyDay, symbolLabel, toCandles } from '../engine'
 import type { BracketInput, DayFile, DayIndex, Order, Settlement, Side, Trade } from '../engine'
 
 export type Phase = 'menu' | 'loading' | 'playing' | 'settled'
@@ -73,6 +73,9 @@ export const useGameStore = defineStore('game', () => {
   const liveMode = ref(true)
   const paused = ref(false)
   const leverage = ref(1)
+  // 切換資產類別時，槓桿回到該類別的預設值（加密貨幣 1x、外匯 30x）
+  watch(assetFilter, (a) => { leverage.value = defaultLeverage(a) }, { immediate: true })
+  const leverageChoices = computed(() => leverageOptions(assetFilter.value))
   const snap = reactive<Snapshot>(emptySnap())
   const version = ref(0) // 每次畫面需要同步圖表時 +1
   const recentTrades = ref<Trade[]>([])
@@ -102,7 +105,8 @@ export const useGameStore = defineStore('game', () => {
     try {
       index.value ??= await getJson<DayIndex>('index.json')
       // 題庫沒有「全部」：預設選第一個資產類別
-      const first = index.value.days[0]?.asset
+      const present = new Set(index.value.days.map((d) => d.asset))
+      const first = Object.keys(ASSET_LABELS).find((a) => present.has(a)) ?? index.value.days[0]?.asset
       if (first && !index.value.days.some((d) => d.asset === assetFilter.value)) assetFilter.value = first
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -119,9 +123,10 @@ export const useGameStore = defineStore('game', () => {
   /** 圖表與數字的顯示換算：k = 正規化價格 → 真實價格；base = 當日 UTC 0 點（秒） */
   const display = computed(() => {
     const d = day.value
-    if (!d || !liveMode.value) return { live: false, k: 1, base: 0 }
-    return { live: true, k: d.meta.scale / 100, base: Date.parse(d.meta.date + 'T00:00:00Z') / 1000 }
+    if (!d || !liveMode.value) return { live: false, k: 1, base: 0, digits: undefined as number | undefined, lots: undefined as ((qty: number, p: number) => number) | undefined }
+    return { live: true, k: d.meta.scale / 100, base: Date.parse(d.meta.date + 'T00:00:00Z') / 1000, digits: d.asset === 'fx' ? d.meta.digits : undefined, lots: d.asset === 'fx' ? (qty: number, p: number) => lotsFromQty(d.meta, qty, p, d.meta.scale / 100) : undefined }
   })
+  const isFx = computed(() => day.value?.asset === 'fx')
 
   /** 目前題庫內的幣種（受資產類別篩選影響） */
   const symbols = computed(() => {
@@ -130,7 +135,7 @@ export const useGameStore = defineStore('game', () => {
       if (!d.symbol || (assetFilter.value !== 'all' && d.asset !== assetFilter.value)) continue
       m.set(d.symbol, (m.get(d.symbol) ?? 0) + 1)
     }
-    return [...m].map(([symbol, count]) => ({ symbol, label: symbol.replace(/USDT$/, ''), count })).sort((a, b) => a.label.localeCompare(b.label))
+    return [...m].map(([symbol, count]) => ({ symbol, label: symbolLabel(symbol, assetFilter.value), count })).sort((a, b) => a.label.localeCompare(b.label))
   })
   const isSynthetic = computed(() => (index.value?.days ?? []).some((d) => d.synthetic))
 
@@ -148,7 +153,7 @@ export const useGameStore = defineStore('game', () => {
       const scoped: DayIndex = { ...index.value, days }
       const entry = mode === 'daily' ? pickDailyDay(scoped, today) : pickDay(scoped, createRng(seed))
       day.value = await getJson<DayFile>(entry.file)
-      game.value = markRaw(new Game(toCandles(day.value), { seed, leverage: leverage.value }))
+      game.value = markRaw(new Game(toCandles(day.value), gameOptionsForDay(day.value.asset, day.value.meta, leverage.value, seed)))
       isDaily.value = mode === 'daily'
       settlement.value = null
       paused.value = false
@@ -158,7 +163,8 @@ export const useGameStore = defineStore('game', () => {
       recentTrades.value = []
       Object.assign(form, { type: 'market', price: '', tp: '', sl: '', trailPct: '' })
       Object.assign(edit, { tp: '', sl: '', trailPct: '' })
-      form.amount = String(Math.floor(game.value.buyingPower * 0.5))
+      form.amount = ''
+      setAmountFraction(0.5)
       refresh()
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -197,26 +203,35 @@ export const useGameStore = defineStore('game', () => {
     const g = game.value
     if (!g) return
     const p = g.price * display.value.k
-    form.price = p.toFixed(display.value.k === 1 ? 3 : p >= 100 ? 2 : 4)
+    form.price = p.toFixed(display.value.digits ?? (display.value.k === 1 ? 3 : p >= 100 ? 2 : 4))
   }
 
+  /** 外匯下單單位是「手」，加密貨幣是 USD 金額 */
   function setAmountFraction(f: number) {
     const g = game.value
     if (!g) return
-    form.amount = String(Math.floor(g.buyingPower * f * (f >= 1 ? 0.99 : 1)))
+    const usd = g.buyingPower * f * (f >= 1 ? 0.99 : 1)
+    if (isFx.value && day.value) {
+      const lot = lotNotionalUsd(day.value.meta, g.price * display.value.k)
+      form.amount = (Math.floor((usd / lot) * 100) / 100).toFixed(2)
+    } else {
+      form.amount = String(Math.floor(usd))
+    }
   }
 
   function place(side: Side) {
     act((g) => {
       const k = display.value.k
-      const amount = num(form.amount, '下單金額')
-      if (amount === undefined) throw new OrderError('請輸入下單金額')
+      const size = num(form.amount, isFx.value ? '手數' : '下單金額')
+      if (size === undefined) throw new OrderError(isFx.value ? '請輸入手數' : '請輸入下單金額')
       let ref = g.price
       if (form.type !== 'market') {
         const p = num(form.price, '價格')
         if (p === undefined) throw new OrderError('請輸入委託價格')
         ref = p / k
       }
+      // 外匯以手數下單：換算成美元名目金額
+      const amount = isFx.value && day.value ? size * lotNotionalUsd(day.value.meta, ref * k) : size
       const tp = num(form.tp, '止盈價'), sl = num(form.sl, '止損價'), trailPct = num(form.trailPct, '追蹤比例')
       const bracket: BracketInput = { tp: tp === undefined ? undefined : tp / k, sl: sl === undefined ? undefined : sl / k, trail: trailPct === undefined ? undefined : (ref * trailPct) / 100 }
       const qty = amount / ref
@@ -269,5 +284,5 @@ export const useGameStore = defineStore('game', () => {
     phase.value = 'menu'
   }
 
-  return { phase, error, notice, day, game, settlement, isDaily, speedIdx, paused, leverage, liveMode, display, assetFilter, symbolFilter, symbols, isSynthetic, pool, loadIndex, snap, version, start, advance, form, edit, feed, recentTrades, fillPrice, setAmountFraction, place, applyBracket, clearBracket, dragBracket, closeAll, closePart, cancelOrder, settle, backToMenu }
+  return { phase, error, notice, day, game, settlement, isDaily, speedIdx, paused, leverage, liveMode, display, isFx, leverageChoices, assetFilter, symbolFilter, symbols, isSynthetic, pool, loadIndex, snap, version, start, advance, form, edit, feed, recentTrades, fillPrice, setAmountFraction, place, applyBracket, clearBracket, dragBracket, closeAll, closePart, cancelOrder, settle, backToMenu }
 })

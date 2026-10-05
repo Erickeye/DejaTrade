@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CandleChart from '../components/CandleChart.vue'
 import { DEFAULT_TOGGLES, INDICATOR_LABELS } from '../components/chart-options'
-import { TIMEFRAMES } from '../engine'
+import { TIMEFRAMES, lotNotionalUsd, symbolLabel } from '../engine'
 import { ASSET_LABELS, SPEEDS, useGameStore } from '../stores/game'
 
 const store = useGameStore()
@@ -21,29 +21,48 @@ function loop(now: number) {
 onMounted(() => { store.loadIndex(); last = performance.now(); raf = requestAnimationFrame(loop) })
 onBeforeUnmount(() => cancelAnimationFrame(raf))
 
-watch(() => store.version, () => { if (store.game) chart.value?.sync(store.game) })
+watch(() => store.version, () => { if (store.game) chart.value?.sync(store.game, store.display) })
 watch(() => store.phase, (p) => { if (p === 'playing') chart.value?.reset() })
 watch(() => store.form.type, (t) => { if (t !== 'market') store.fillPrice() })
 
 const fmt = (n: number, d = 2) => n.toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d })
 const signed = (n: number, d = 2) => (n > 0 ? '+' : '') + fmt(n, d)
 const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'dim')
-const price = (n: number) => fmt(n * store.display.k, store.display.k === 1 ? 3 : n * store.display.k >= 100 ? 2 : 4)
+const price = (n: number) => fmt(n * store.display.k, store.display.digits ?? (store.display.k === 1 ? 3 : n * store.display.k >= 100 ? 2 : 4))
+/** 部位 / 掛單大小：外匯顯示手數，加密貨幣顯示幣數 */
+const sizeText = (qty: number, normPrice: number) => (store.display.lots ? `${store.display.lots(qty, normPrice).toFixed(2)} 手` : fmt(Math.abs(qty) / store.display.k, 4))
 const tfLabel = (tf: number) => (tf === 60 ? '1h' : tf + 'm')
 const pct = (n: number) => (n * 100).toFixed(2) + '%'
 
 const positionText = computed(() => {
   const s = store.snap
   if (s.qty === 0) return '空手'
-  return `${s.qty > 0 ? '多' : '空'} ${fmt(Math.abs(s.qty) / store.display.k, 4)} @ ${price(s.avgEntry)}`
+  return `${s.qty > 0 ? '多' : '空'} ${sizeText(s.qty, s.avgEntry)} @ ${price(s.avgEntry)}`
 })
 const equityPct = computed(() => ((store.snap.equity / (store.game?.initialCash ?? 1)) - 1) * 100)
 
-/** 預估下單數量（幣數；盲測為正規化單位） */
-const estQty = computed(() => {
-  const amount = Number(store.form.amount.replace(/,/g, ''))
+/** 外匯：價格距離均價幾個 pip（加密貨幣回傳空字串） */
+const pipDist = (normPrice: number) => {
+  const d = store.day
+  if (!d || d.asset !== 'fx' || !d.meta.pipSize) return ''
+  const pips = ((normPrice - store.snap.avgEntry) * store.display.k) / d.meta.pipSize
+  return `${pips > 0 ? '+' : ''}${pips.toFixed(1)} pip`
+}
+
+/** 下單預覽與成本說明 */
+const estText = computed(() => {
+  const d = store.day
+  const size = Number(store.form.amount.replace(/,/g, ''))
   const ref = store.form.type === 'market' ? store.snap.price * store.display.k : Number(store.form.price.replace(/,/g, ''))
-  return amount > 0 && ref > 0 ? amount / ref : 0
+  if (!d || !(size > 0) || !(ref > 0)) return ''
+  if (d.asset === 'fx') return `名目 $${fmt(size * lotNotionalUsd(d.meta, ref), 0)}`
+  return `約 ${fmt(size / ref, store.display.k === 1 ? 2 : 5)} ${store.display.live ? symbolLabel(d.meta.symbol, d.asset) : '單位'}`
+})
+const costText = computed(() => {
+  const g = store.game, d = store.day
+  if (!g || !d) return ''
+  if (d.asset === 'fx') return `價差 ${d.meta.spreadPips ?? '—'} pip，無手續費`
+  return `吃單 ${pct(g.takerFeeRate)} / 掛單 ${pct(g.makerFeeRate)}，價差 ${pct(g.spreadPct)}`
 })
 
 const REASON: Record<string, string> = { market: '市價', limit: '限價', stop: '停損單', tp: '止盈', sl: '止損', liquidation: '強平' }
@@ -70,7 +89,7 @@ const reveal = computed(() => {
       <h1>DejaTrade <span class="dim">當沖模擬器</span></h1>
       <span v-if="store.phase === 'playing' && store.isDaily" class="tag">每日挑戰</span>
       <span v-if="store.day && store.phase === 'playing'" class="tag alt">
-        <template v-if="store.display.live">{{ store.day.meta.symbol.replace(/USDT$/, '') }} · {{ store.day.meta.date }}（UTC）· {{ store.day.interval }} K 線</template>
+        <template v-if="store.display.live">{{ symbolLabel(store.day.meta.symbol, store.day.asset) }} · {{ store.day.meta.date }}（UTC）· {{ store.day.interval }} K 線</template>
         <template v-else>{{ ASSET_LABELS[store.day.asset] ?? store.day.asset }} · {{ store.day.interval }} K 線 · 盲測</template>
         <template v-if="store.day.meta.synthetic"> · 合成資料</template>
       </span>
@@ -98,7 +117,7 @@ const reveal = computed(() => {
       <p v-else class="dim small">盲測模式：標的與日期隱藏，結算後才揭曉。</p>
       <div class="row">
         <span class="dim">槓桿</span>
-        <button v-for="l in [1, 5, 20]" :key="l" :class="{ on: store.leverage === l }" @click="store.leverage = l">{{ l }}x</button>
+        <button v-for="l in store.leverageChoices" :key="l" :class="{ on: store.leverage === l }" @click="store.leverage = l">{{ l }}x</button>
       </div>
       <div class="row">
         <button class="primary" :disabled="store.phase === 'loading'" @click="store.start('random')">隨機一局</button>
@@ -144,7 +163,7 @@ const reveal = computed(() => {
               <button :class="{ on: store.form.type === 'limit' }" @click="store.form.type = 'limit'">限價</button>
               <button :class="{ on: store.form.type === 'stop' }" @click="store.form.type = 'stop'">停損</button>
             </div>
-            <label class="field"><span>金額 (USD)</span><input v-model="store.form.amount" inputmode="decimal" /></label>
+            <label class="field"><span>{{ store.isFx ? '手數 (lot)' : '金額 (USD)' }}</span><input v-model="store.form.amount" inputmode="decimal" /></label>
             <div class="seg full">
               <button v-for="f in fractions" :key="f" @click="store.setAmountFraction(f)">{{ f * 100 }}%</button>
             </div>
@@ -154,7 +173,7 @@ const reveal = computed(() => {
               <label class="field"><span>止損價</span><input v-model="store.form.sl" inputmode="decimal" placeholder="選填" /></label>
               <label class="field"><span>追蹤 %</span><input v-model="store.form.trailPct" inputmode="decimal" placeholder="選填" /></label>
             </div>
-            <div class="dim small">約 {{ fmt(estQty, store.display.k === 1 ? 2 : 5) }} {{ store.display.live && store.day ? store.day.meta.symbol.replace(/USDT$/, '') : '單位' }}　·　吃單 {{ pct(store.game?.takerFeeRate ?? 0) }} / 掛單 {{ pct(store.game?.makerFeeRate ?? 0) }}，價差 {{ pct(store.game?.spreadPct ?? 0) }}</div>
+            <div class="dim small">{{ estText }}　·　{{ costText }}<template v-if="store.isFx">　·　1 手 = 100,000 基礎貨幣</template></div>
             <div class="row">
               <button class="buy" @click="store.place('buy')">買進 / 做多</button>
               <button class="sell" @click="store.place('sell')">賣出 / 做空</button>
@@ -165,8 +184,8 @@ const reveal = computed(() => {
           <!-- 持倉管理 -->
           <div v-if="store.snap.qty !== 0" class="card">
             <div class="dim small">
-              止盈 <b>{{ store.snap.tp != null ? price(store.snap.tp) : '—' }}</b> ·
-              止損 <b>{{ store.snap.sl != null ? price(store.snap.sl) : '—' }}</b><template v-if="store.snap.trail != null">（追蹤）</template>
+              止盈 <b>{{ store.snap.tp != null ? price(store.snap.tp) : '—' }}</b><template v-if="store.snap.tp != null && pipDist(store.snap.tp)">（{{ pipDist(store.snap.tp) }}）</template> ·
+              止損 <b>{{ store.snap.sl != null ? price(store.snap.sl) : '—' }}</b><template v-if="store.snap.sl != null && pipDist(store.snap.sl)">（{{ pipDist(store.snap.sl) }}）</template><template v-if="store.snap.trail != null">（追蹤）</template>
               <span>　可在圖上拖曳線條調整</span>
             </div>
             <div class="grid3">
@@ -191,7 +210,7 @@ const reveal = computed(() => {
             <div class="dim small">掛單</div>
             <div v-for="o in store.snap.orders" :key="o.id" class="line">
               <span :class="o.side === 'buy' ? 'up' : 'down'">{{ o.type === 'limit' ? '限價' : '停損' }}{{ o.side === 'buy' ? '買' : '賣' }}</span>
-              <span>{{ fmt(o.qty / store.display.k, 4) }} @ {{ price(o.price) }}</span>
+              <span>{{ sizeText(o.qty, o.price) }} @ {{ price(o.price) }}</span>
               <button class="mini" @click="store.cancelOrder(o.id)">取消</button>
             </div>
           </div>
@@ -211,7 +230,7 @@ const reveal = computed(() => {
             <div class="dim small">最近成交</div>
             <div v-for="(t, i) in store.recentTrades" :key="i" class="line small">
               <span :class="t.side === 'buy' ? 'up' : 'down'">{{ t.side === 'buy' ? '買' : '賣' }} · {{ REASON[t.reason] }}</span>
-              <span>{{ fmt(t.qty / store.display.k, 4) }} @ {{ price(t.price) }}</span>
+              <span>{{ sizeText(t.qty, t.price) }} @ {{ price(t.price) }}</span>
               <span :class="cls(t.realized)">{{ t.realized !== 0 ? signed(t.realized) : '' }}</span>
             </div>
           </div>

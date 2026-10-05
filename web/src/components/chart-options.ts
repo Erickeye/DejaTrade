@@ -18,4 +18,8 @@ export interface ChartDisplay {
   k: number
   /** 當日 UTC 0 點（秒），盲測模式為 0 */
   base: number
+  /** 外匯報價小數位數；加密貨幣為 undefined（依價格大小自動決定） */
+  digits?: number
+  /** 外匯：把引擎部位數量換成手數；加密貨幣為 undefined */
+  lots?: (qty: number, normPrice: number) => number
 }

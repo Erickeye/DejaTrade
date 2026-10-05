@@ -207,8 +207,9 @@ DejaTrade/
 - [ ] 戰績與統計（IndexedDB）、成就
 
 ### Phase 3：外匯
-- [ ] DataTool 加入 Dukascopy 來源、處理週末缺口
-- [ ] 手續費 / 點差模型區分資產類別
+- [x] Node 腳本 `fetch:fx` 從 Dukascopy 抓 EURUSD / GBPUSD / USDJPY 1m（避開週末，預設週一至週四）；C# DataTool 之後補
+- [x] 手續費 / 點差模型區分資產類別（FX：無手續費、點差以 pip、槓桿 10/30/100x、手數與 pip 顯示）
+- [ ] 實機驗證 `fetch:fx`（沙箱連不上 Dukascopy，尚未對真實網路跑過）
 
 ### Phase 4：Arcade 與小遊戲
 - [ ] 首頁改為遊戲廳結構
@@ -246,6 +247,9 @@ DejaTrade/
 | 2026-10-02 | 雛型先以合成資料跑通前端與引擎；DataTool 之後補 | 先驗證玩法，再接真實資料 |
 | 2026-10-02 | 雛型階段改用 Node 腳本 `fetch:binance` 抓 BTC/ETH/SOL 真實資料；`public/data/` 不進版控 | 免裝 dotnet 就有真實資料；授權未確認前不公開散布。C# DataTool 之後補，輸出格式不變 |
 | 2026-10-02 | 資料順序：加密貨幣 → 外匯 → 股票 | 資料取得難度與授權清晰度由易到難 |
+| 2026-10-05 | 外匯資料採 Dukascopy（取代 HistData，因 HistData 僅 1m 且操作空間小）；僅供個人練習 | Dukascopy 條款為個人非商業用途；資料只放本機（`web/public/data/`、`.dukascopy-cache` 不進版控），**不可公開部署**，若要上線需另行取得授權或改用自行產生的資料 |
+| 2026-10-05 | 成本模型依資產類別區分；FX 用手數（1 lot = 100,000 基礎貨幣）與 pip，槓桿 10/30/100x（預設 30x），維持保證金 = 0.5/槓桿 | 貼近真實外匯下單；加密貨幣維持原 taker/maker 手續費模型 |
+| 2026-10-05 | 各 fetch 腳本只取代自己資產類別的題庫與索引 | 避免抓外匯時蓋掉加密貨幣資料 |
 
 **曾評估但未採用**：方案 B（Avalonia / WPF 桌面 App + LiteDB，全 .NET 但需下載才能玩）、方案 C（本機 ASP.NET Core 打包 Vue）、方案 D（純前端、不用 .NET）。若之後想強化 .NET 展示，可回頭評估 B。
 
