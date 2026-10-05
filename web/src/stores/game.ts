@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, markRaw, reactive, ref, shallowRef } from 'vue'
 import { Game, OrderError, dailySeed, createRng, pickDay, pickDailyDay, toCandles } from '../engine'
-import type { DayFile, DayIndex, Settlement } from '../engine'
+import type { BracketInput, DayFile, DayIndex, Order, Settlement, Side, Trade } from '../engine'
 
 export type Phase = 'menu' | 'loading' | 'playing' | 'settled'
 /** 播放倍率：1x = 真實時間（1 分鐘 K 線要跑 60 秒） */
@@ -27,9 +27,35 @@ export interface Snapshot {
   buyingPower: number
   progress: number
   tradeCount: number
+  liquidationPrice: number | null
+  usedMargin: number
+  tp: number | null
+  sl: number | null
+  trail: number | null
+  orders: Order[]
 }
 
-const emptySnap = (): Snapshot => ({ equity: 0, cash: 0, qty: 0, avgEntry: 0, price: 0, unrealized: 0, buyingPower: 0, progress: 0, tradeCount: 0 })
+const emptySnap = (): Snapshot => ({ equity: 0, cash: 0, qty: 0, avgEntry: 0, price: 0, unrealized: 0, buyingPower: 0, progress: 0, tradeCount: 0, liquidationPrice: null, usedMargin: 0, tp: null, sl: null, trail: null, orders: [] })
+
+export type OrderKind = 'market' | 'limit' | 'stop'
+
+/** 下單表單（字串，直接綁定 input）。價格欄位是「顯示價格」：實況為真實價位、盲測為正規化價位。 */
+export interface OrderForm {
+  type: OrderKind
+  amount: string
+  price: string
+  tp: string
+  sl: string
+  trailPct: string
+}
+
+function num(s: string, label: string): number | undefined {
+  const t = s.trim()
+  if (t === '') return undefined
+  const n = Number(t.replace(/,/g, ''))
+  if (!Number.isFinite(n) || n <= 0) throw new OrderError(`${label}格式不正確`)
+  return n
+}
 
 export const useGameStore = defineStore('game', () => {
   const phase = ref<Phase>('menu')
@@ -49,6 +75,10 @@ export const useGameStore = defineStore('game', () => {
   const leverage = ref(1)
   const snap = reactive<Snapshot>(emptySnap())
   const version = ref(0) // 每次畫面需要同步圖表時 +1
+  const recentTrades = ref<Trade[]>([])
+  const feed = ref<string[]>([])
+  const form = reactive<OrderForm>({ type: 'market', amount: '', price: '', tp: '', sl: '', trailPct: '' })
+  const edit = reactive({ tp: '', sl: '', trailPct: '' })
   let acc = 0
 
   function refresh() {
@@ -58,7 +88,13 @@ export const useGameStore = defineStore('game', () => {
       equity: g.equity, cash: g.cash, qty: g.qty, avgEntry: g.avgEntry, price: g.price,
       unrealized: g.unrealized, buyingPower: g.buyingPower,
       progress: (g.candleIndex + 1) / g.candles.length, tradeCount: g.trades.length,
+      liquidationPrice: g.liquidationPrice, usedMargin: g.usedMargin, tp: g.tp, sl: g.sl, trail: g.trail, orders: [...g.orders],
     })
+    if (recentTrades.value.length !== Math.min(g.trades.length, 8) || recentTrades.value[0] !== g.trades.at(-1)) {
+      recentTrades.value = g.trades.slice(-8).reverse()
+    }
+    const msgs = g.drainMessages()
+    if (msgs.length) feed.value = [...msgs.reverse(), ...feed.value].slice(0, 6)
     version.value++
   }
 
@@ -118,6 +154,11 @@ export const useGameStore = defineStore('game', () => {
       paused.value = false
       acc = 0
       phase.value = 'playing'
+      feed.value = []
+      recentTrades.value = []
+      Object.assign(form, { type: 'market', price: '', tp: '', sl: '', trailPct: '' })
+      Object.assign(edit, { tp: '', sl: '', trailPct: '' })
+      form.amount = String(Math.floor(game.value.buyingPower * 0.5))
       refresh()
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -137,23 +178,83 @@ export const useGameStore = defineStore('game', () => {
     if (g.finished) settle()
   }
 
-  function order(kind: 'buy' | 'sell', fraction: number) {
+  /** 執行一個會丟 OrderError 的動作，錯誤顯示在 notice，並同步畫面 */
+  function act(fn: (g: Game) => void) {
     const g = game.value
     if (!g || phase.value !== 'playing') return
     notice.value = ''
     try {
-      const amount = g.buyingPower * fraction
-      if (kind === 'buy') g.buyNotional(amount)
-      else g.sellNotional(amount)
+      fn(g)
     } catch (e) {
-      notice.value = e instanceof OrderError ? e.message : String(e)
+      if (!(e instanceof OrderError)) throw e
+      notice.value = e.message
     }
     refresh()
   }
 
+  /** 切換委託類型時，預設帶入現價 */
+  function fillPrice() {
+    const g = game.value
+    if (!g) return
+    const p = g.price * display.value.k
+    form.price = p.toFixed(display.value.k === 1 ? 3 : p >= 100 ? 2 : 4)
+  }
+
+  function setAmountFraction(f: number) {
+    const g = game.value
+    if (!g) return
+    form.amount = String(Math.floor(g.buyingPower * f * (f >= 1 ? 0.99 : 1)))
+  }
+
+  function place(side: Side) {
+    act((g) => {
+      const k = display.value.k
+      const amount = num(form.amount, '下單金額')
+      if (amount === undefined) throw new OrderError('請輸入下單金額')
+      let ref = g.price
+      if (form.type !== 'market') {
+        const p = num(form.price, '價格')
+        if (p === undefined) throw new OrderError('請輸入委託價格')
+        ref = p / k
+      }
+      const tp = num(form.tp, '止盈價'), sl = num(form.sl, '止損價'), trailPct = num(form.trailPct, '追蹤比例')
+      const bracket: BracketInput = { tp: tp === undefined ? undefined : tp / k, sl: sl === undefined ? undefined : sl / k, trail: trailPct === undefined ? undefined : (ref * trailPct) / 100 }
+      const qty = amount / ref
+      if (form.type === 'market') (side === 'buy' ? g.buy(qty, bracket) : g.sell(qty, bracket))
+      else if (form.type === 'limit') g.placeLimit(side, qty, ref, bracket)
+      else g.placeStop(side, qty, ref, bracket)
+    })
+  }
+
+  /** 修改持倉的止盈 / 止損 / 追蹤停損（欄位留空 = 不變） */
+  function applyBracket() {
+    act((g) => {
+      const k = display.value.k
+      const tp = num(edit.tp, '止盈價'), sl = num(edit.sl, '止損價'), trailPct = num(edit.trailPct, '追蹤比例')
+      g.setBracket({ tp: tp === undefined ? undefined : tp / k, sl: sl === undefined ? undefined : sl / k, trail: trailPct === undefined ? undefined : (g.price * trailPct) / 100 })
+      Object.assign(edit, { tp: '', sl: '', trailPct: '' })
+    })
+  }
+
+  function clearBracket() {
+    act((g) => g.setBracket({ tp: null, sl: null, trail: null }))
+  }
+
+  /** 圖上拖曳止盈 / 止損線 */
+  function dragBracket(kind: 'tp' | 'sl', enginePrice: number) {
+    act((g) => g.setBracket({ [kind]: enginePrice }))
+  }
+
   function closeAll() {
-    game.value?.closeAll()
-    refresh()
+    act((g) => void g.closeAll())
+  }
+
+  function closePart(fraction: number) {
+    act((g) => void g.closeFraction(fraction))
+  }
+
+  function cancelOrder(id: number) {
+    act((g) => void g.cancelOrder(id))
   }
 
   function settle() {
@@ -168,5 +269,5 @@ export const useGameStore = defineStore('game', () => {
     phase.value = 'menu'
   }
 
-  return { phase, error, notice, day, game, settlement, isDaily, speedIdx, paused, leverage, liveMode, display, assetFilter, symbolFilter, symbols, isSynthetic, pool, loadIndex, snap, version, start, advance, order, closeAll, settle, backToMenu }
+  return { phase, error, notice, day, game, settlement, isDaily, speedIdx, paused, leverage, liveMode, display, assetFilter, symbolFilter, symbols, isSynthetic, pool, loadIndex, snap, version, start, advance, form, edit, feed, recentTrades, fillPrice, setAmountFraction, place, applyBracket, clearBracket, dragBracket, closeAll, closePart, cancelOrder, settle, backToMenu }
 })
