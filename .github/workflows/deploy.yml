@@ -1,0 +1,62 @@
+# 部署網頁版到 GitHub Pages（push 到 main 時自動執行）
+# 注意：公開網站只放「程式產生的合成資料」；加密貨幣歷史資料由訪客的瀏覽器即時向 Binance 取得。
+# Dukascopy 外匯資料僅限個人使用，不可上線（下方有檢查擋住）。
+name: Deploy web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: 產生合成題庫（公開站只用合成資料）
+        run: npm run gen:sample
+      - name: 建置（加密貨幣啟用瀏覽器即時資料）
+        run: npm run build
+        env:
+          VITE_LIVE_CRYPTO: '1'
+      - name: 授權檢查：dist 內不得有非合成的外匯資料
+        run: |
+          node -e "
+          const fs=require('fs'),p=require('path');
+          const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);
+          const dir='dist/data/days/fx'; if(!fs.existsSync(dir)) process.exit(0);
+          const bad=walk(dir).filter(f=>f.endsWith('.json')&&!JSON.parse(fs.readFileSync(f,'utf8')).meta?.synthetic);
+          if(bad.length){console.error('發現非合成外匯資料，停止部署：',bad.slice(0,3));process.exit(1)}
+          console.log('OK：外匯資料皆為合成')"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

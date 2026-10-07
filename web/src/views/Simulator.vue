@@ -110,9 +110,10 @@ const reveal = computed(() => {
       <div v-if="store.symbols.length" class="row">
         <span class="dim">幣種</span>
         <button :class="{ on: store.symbolFilter === 'all' }" @click="store.symbolFilter = 'all'">全部（盲測）</button>
-        <button v-for="s in store.symbols" :key="s.symbol" :class="{ on: store.symbolFilter === s.symbol }" @click="store.symbolFilter = s.symbol">{{ s.label }}（{{ s.count }}）</button>
+        <button v-for="s in store.symbols" :key="s.symbol" :class="{ on: store.symbolFilter === s.symbol }" @click="store.symbolFilter = s.symbol">{{ s.label }}<template v-if="!s.live">（{{ s.count }}）</template></button>
       </div>
-      <p v-if="store.isSynthetic" class="dim small">目前題庫為開發用的合成資料，並非真實行情。</p>
+      <p v-if="store.isSynthetic" class="dim small">此題庫為程式產生的合成資料，並非真實行情。</p>
+      <p v-else-if="store.pool.find((p) => p.asset === store.assetFilter)?.live" class="dim small">歷史行情取自 Binance 公開資料，於你的瀏覽器即時下載（需連網）。{{ store.liveMode ? '時間為 UTC。' : '盲測：標的與日期結算後才揭曉。' }}</p>
       <p v-else-if="store.liveMode" class="dim small">實況模式：顯示真實日期與價格（時間為 UTC）。</p>
       <p v-else class="dim small">盲測模式：標的與日期隱藏，結算後才揭曉。</p>
       <div class="row">

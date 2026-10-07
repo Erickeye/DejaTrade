@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, markRaw, reactive, ref, shallowRef, watch } from 'vue'
 import { Game, OrderError, dailySeed, createRng, defaultLeverage, gameOptionsForDay, leverageOptions, lotNotionalUsd, lotsFromQty, pickDay, pickDailyDay, symbolLabel, toCandles } from '../engine'
+import { LIVE_SYMBOLS, liveEnabled, pickLiveDay } from '../data/live'
 import type { BracketInput, DayFile, DayIndex, Order, Settlement, Side, Trade } from '../engine'
 
 export type Phase = 'menu' | 'loading' | 'playing' | 'settled'
@@ -62,6 +63,8 @@ export const useGameStore = defineStore('game', () => {
   const error = ref('')
   const notice = ref('')
   const index = shallowRef<DayIndex | null>(null)
+  /** 網頁版：加密貨幣即時抓取失敗時退回的靜態（合成）題庫 */
+  const fallbackDays = shallowRef<DayIndex['days']>([])
   const day = shallowRef<DayFile | null>(null)
   const game = shallowRef<Game | null>(null)
   const settlement = ref<Settlement | null>(null)
@@ -103,7 +106,15 @@ export const useGameStore = defineStore('game', () => {
 
   async function loadIndex() {
     try {
-      index.value ??= await getJson<DayIndex>('index.json')
+      if (!index.value) {
+        const idx = await getJson<DayIndex>('index.json')
+        if (liveEnabled()) {
+          // 加密貨幣改為「即時」：每個標的一個虛擬題目，實際日期在開局時抽
+          fallbackDays.value = idx.days.filter((d) => d.asset === 'crypto')
+          idx.days = [...idx.days.filter((d) => d.asset !== 'crypto'), ...LIVE_SYMBOLS.map((s) => ({ id: `live-${s}`, asset: 'crypto', symbol: s, live: true, file: '' }))]
+        }
+        index.value = idx
+      }
       // 題庫沒有「全部」：預設選第一個資產類別
       const present = new Set(index.value.days.map((d) => d.asset))
       const first = Object.keys(ASSET_LABELS).find((a) => present.has(a)) ?? index.value.days[0]?.asset
@@ -113,11 +124,14 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  /** 題庫是否為即時下載（此時不顯示局數） */
+  const isLive = (asset: string) => (index.value?.days ?? []).some((d) => d.asset === asset && d.live)
+
   /** 目前題庫：各資產類別有幾個交易日 */
   const pool = computed(() => {
     const m = new Map<string, number>()
     for (const d of index.value?.days ?? []) m.set(d.asset, (m.get(d.asset) ?? 0) + 1)
-    return [...m].map(([asset, count]) => ({ asset, label: ASSET_LABELS[asset] ?? asset, count }))
+    return [...m].map(([asset, count]) => ({ asset, label: ASSET_LABELS[asset] ?? asset, count, live: isLive(asset) }))
   })
 
   /** 圖表與數字的顯示換算：k = 正規化價格 → 真實價格；base = 當日 UTC 0 點（秒） */
@@ -135,9 +149,9 @@ export const useGameStore = defineStore('game', () => {
       if (!d.symbol || (assetFilter.value !== 'all' && d.asset !== assetFilter.value)) continue
       m.set(d.symbol, (m.get(d.symbol) ?? 0) + 1)
     }
-    return [...m].map(([symbol, count]) => ({ symbol, label: symbolLabel(symbol, assetFilter.value), count })).sort((a, b) => a.label.localeCompare(b.label))
+    return [...m].map(([symbol, count]) => ({ symbol, label: symbolLabel(symbol, assetFilter.value), count, live: isLive(assetFilter.value) })).sort((a, b) => a.label.localeCompare(b.label))
   })
-  const isSynthetic = computed(() => (index.value?.days ?? []).some((d) => d.synthetic))
+  const isSynthetic = computed(() => (index.value?.days ?? []).some((d) => d.synthetic && d.asset === assetFilter.value))
 
   async function start(mode: 'random' | 'daily') {
     error.value = ''
@@ -152,7 +166,17 @@ export const useGameStore = defineStore('game', () => {
       if (days.length === 0) throw new Error('此條件下沒有可抽的交易日')
       const scoped: DayIndex = { ...index.value, days }
       const entry = mode === 'daily' ? pickDailyDay(scoped, today) : pickDay(scoped, createRng(seed))
-      day.value = await getJson<DayFile>(entry.file)
+      if (entry.live) {
+        try {
+          day.value = await pickLiveDay(entry.symbol!, (seed ^ 0x9e3779b9) >>> 0)
+        } catch (e) {
+          // 瀏覽器連不上 Binance（離線 / 被擋）→ 退回合成資料，並明確告知
+          const fb = fallbackDays.value
+          if (fb.length === 0) throw new Error(`無法取得 ${symbolLabel(entry.symbol!, 'crypto')} 的即時歷史資料：${e instanceof Error ? e.message : e}`)
+          day.value = await getJson<DayFile>(pickDay({ version: 1, days: fb }, createRng(seed)).file)
+          notice.value = '無法連線到 Binance，這局改用合成資料。'
+        }
+      } else day.value = await getJson<DayFile>(entry.file)
       game.value = markRaw(new Game(toCandles(day.value), gameOptionsForDay(day.value.asset, day.value.meta, leverage.value, seed)))
       isDaily.value = mode === 'daily'
       settlement.value = null

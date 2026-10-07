@@ -250,6 +250,7 @@ DejaTrade/
 | 2026-10-05 | 外匯資料採 Dukascopy（取代 HistData，因 HistData 僅 1m 且操作空間小）；僅供個人練習 | Dukascopy 條款為個人非商業用途；資料只放本機（`web/public/data/`、`.dukascopy-cache` 不進版控），**不可公開部署**，若要上線需另行取得授權或改用自行產生的資料 |
 | 2026-10-05 | 成本模型依資產類別區分；FX 用手數（1 lot = 100,000 基礎貨幣）與 pip，槓桿 10/30/100x（預設 30x），維持保證金 = 0.5/槓桿 | 貼近真實外匯下單；加密貨幣維持原 taker/maker 手續費模型 |
 | 2026-10-05 | 各 fetch 腳本只取代自己資產類別的題庫與索引 | 避免抓外匯時蓋掉加密貨幣資料 |
+| 2026-10-05 | 先做網頁版（GitHub Pages，Actions 自動部署）；公開站加密貨幣由訪客瀏覽器即時向 Binance `data-api.binance.vision` 抓取，外匯只放合成資料 | 資料授權限制不能附帶真實資料；Actions 內有檢查擋掉非合成外匯檔。桌面版（Electron，程式內下載題庫）列為之後選項 |
 
 **曾評估但未採用**：方案 B（Avalonia / WPF 桌面 App + LiteDB，全 .NET 但需下載才能玩）、方案 C（本機 ASP.NET Core 打包 Vue）、方案 D（純前端、不用 .NET）。若之後想強化 .NET 展示，可回頭評估 B。
 

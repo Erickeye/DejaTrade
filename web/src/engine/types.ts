@@ -36,7 +36,7 @@ export interface DayFile {
 
 export interface DayIndex {
   version: number
-  days: { id: string; asset: string; symbol?: string; synthetic?: boolean; file: string }[]
+  days: { id: string; asset: string; symbol?: string; synthetic?: boolean; /** 即時下載（網頁版加密貨幣），沒有靜態檔案 */ live?: boolean; file: string }[]
 }
 
 export type Side = 'buy' | 'sell'
