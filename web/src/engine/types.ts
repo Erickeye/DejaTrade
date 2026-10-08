@@ -100,4 +100,6 @@ export interface Settlement {
   totalFees: number
   maxDrawdownPct: number
   liquidated: boolean
+  /** 淨值曲線：第 0 點 = 起始資金，之後每根 K 線收盤一點 */
+  equityCurve: number[]
 }

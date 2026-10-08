@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CandleChart from '../components/CandleChart.vue'
+import ReviewPanel from '../components/ReviewPanel.vue'
+import StatsPanel from '../components/StatsPanel.vue'
+import TutorialModal from '../components/TutorialModal.vue'
 import { DEFAULT_TOGGLES, INDICATOR_LABELS } from '../components/chart-options'
 import { TIMEFRAMES, lotNotionalUsd, symbolLabel } from '../engine'
 import { ASSET_LABELS, SPEEDS, useGameStore } from '../stores/game'
@@ -18,7 +21,7 @@ function loop(now: number) {
   last = now
   raf = requestAnimationFrame(loop)
 }
-onMounted(() => { store.loadIndex(); last = performance.now(); raf = requestAnimationFrame(loop) })
+onMounted(() => { store.loadIndex(); store.init(); last = performance.now(); raf = requestAnimationFrame(loop) })
 onBeforeUnmount(() => cancelAnimationFrame(raf))
 
 watch(() => store.version, () => { if (store.game) chart.value?.sync(store.game, store.display) })
@@ -93,7 +96,11 @@ const reveal = computed(() => {
         <template v-else>{{ ASSET_LABELS[store.day.asset] ?? store.day.asset }} · {{ store.day.interval }} K 線 · 盲測</template>
         <template v-if="store.day.meta.synthetic"> · 合成資料</template>
       </span>
+      <span class="grow"></span>
+      <button class="mini help" title="新手教學" @click="store.openTutorial()">？ 教學</button>
     </header>
+
+    <TutorialModal v-if="store.tutorialOpen" :is-fx="store.isFx" @close="store.closeTutorial()" />
 
     <!-- 主選單 -->
     <section v-if="store.phase === 'menu' || store.phase === 'loading'" class="card menu">
@@ -122,10 +129,11 @@ const reveal = computed(() => {
       </div>
       <div class="row">
         <button class="primary" :disabled="store.phase === 'loading'" @click="store.start('random')">隨機一局</button>
-        <button :disabled="store.phase === 'loading'" @click="store.start('daily')">今日挑戰</button>
+        <button :disabled="store.phase === 'loading'" @click="store.start('daily')">今日挑戰<template v-if="store.dailyToday">（已完成 {{ signed(store.dailyToday.pnlPct) }}%，再玩不計分）</template></button>
       </div>
       <p v-if="store.phase === 'loading'" class="dim">載入中…</p>
       <p v-if="store.error" class="down">{{ store.error }}</p>
+      <StatsPanel :summary="store.summary" :history="store.history" :persistent="store.persistent" @clear="store.clearHistory()" />
     </section>
 
     <!-- 遊戲中 / 結算 共用圖表 -->
@@ -150,7 +158,7 @@ const reveal = computed(() => {
           <div><span class="dim">現價</span><b>{{ price(store.snap.price) }}</b></div>
           <div><span class="dim">部位</span><b>{{ positionText }}</b></div>
           <div><span class="dim">未實現</span><b :class="cls(store.snap.unrealized)">{{ signed(store.snap.unrealized) }}</b></div>
-          <div><span class="dim">可用額度</span><b>{{ fmt(store.snap.buyingPower, 0) }}</b></div>
+          <div :title="'還能再開多少名目部位：淨值 × 槓桿 − 已持有部位'"><span class="dim">還能開</span><b>{{ store.maxOpen ? (store.isFx ? fmt(store.maxOpen.size, 2) + ' 手' : '$' + fmt(store.maxOpen.size, 0)) : '—' }}</b></div>
           <div v-if="store.snap.qty !== 0"><span class="dim">占用保證金</span><b>{{ fmt(store.snap.usedMargin) }}</b></div>
           <div v-if="store.snap.liquidationPrice != null"><span class="dim">強平價</span><b class="warn">{{ price(store.snap.liquidationPrice) }}</b></div>
           <div class="bar"><i :style="{ width: store.snap.progress * 100 + '%' }"></i></div>
@@ -175,6 +183,12 @@ const reveal = computed(() => {
               <label class="field"><span>追蹤 %</span><input v-model="store.form.trailPct" inputmode="decimal" placeholder="選填" /></label>
             </div>
             <div class="dim small">{{ estText }}　·　{{ costText }}<template v-if="store.isFx">　·　1 手 = 100,000 基礎貨幣</template></div>
+            <div v-if="store.risk" class="risk small">
+              <div><span class="dim">名目 / 保證金</span><span>${{ fmt(store.risk.notional, 0) }} / ${{ fmt(store.risk.margin, 0) }}</span></div>
+              <div v-if="store.risk.pipUsd != null"><span class="dim">每 pip 約</span><span>${{ fmt(store.risk.pipUsd, 2) }}</span></div>
+              <div v-if="store.risk.maxLoss != null"><span class="dim">止損最大虧損</span><span class="down">-${{ fmt(store.risk.maxLoss, 2) }}（淨值 {{ fmt(store.risk.maxLossPct ?? 0, 1) }}%）<template v-if="store.risk.slPips != null">· {{ fmt(store.risk.slPips, 1) }} pip</template></span></div>
+              <div v-else class="warn">未設止損：虧損沒有上限（直到強平）</div>
+            </div>
             <div class="row">
               <button class="buy" @click="store.place('buy')">買進 / 做多</button>
               <button class="sell" @click="store.place('sell')">賣出 / 做空</button>
@@ -246,6 +260,7 @@ const reveal = computed(() => {
             <li>交易 {{ store.settlement.trades }} 筆，手續費 {{ fmt(store.settlement.totalFees) }}</li>
             <li>最大回撤 {{ fmt(store.settlement.maxDrawdownPct) }}%</li>
           </ul>
+          <ReviewPanel v-if="store.review" :trips="store.review.trips" :stats="store.review.stats" :equity="store.review.equity" :fmt-price="price" :size-text="sizeText" />
           <div v-if="reveal && !store.display.live" class="reveal">
             <h3>答案揭曉</h3>
             <p><b>{{ reveal.symbol }}</b>　{{ reveal.date }}</p>
@@ -294,5 +309,8 @@ button.mini { padding: 1px 8px; font-size: 12px; }
 .result h2 { margin: 0 0 8px; font-size: 18px; } .result ul { padding-left: 18px; margin: 0 0 8px; line-height: 1.8; }
 .reveal { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; } .reveal h3 { margin: 0 0 4px; font-size: 14px; }
 .reveal p { margin: 2px 0; } .small { font-size: 12px; }
+.grow { flex: 1; } button.help { padding: 3px 10px; font-size: 12px; }
+.risk { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 8px 0; line-height: 1.6; }
+.risk > div { display: flex; justify-content: space-between; gap: 8px; }
 @media (max-width: 960px) { .play { grid-template-columns: 1fr; } .chartbox { height: 520px; } }
 </style>

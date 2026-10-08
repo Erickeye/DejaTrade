@@ -51,6 +51,8 @@ export class Game {
   price: number
   private peakEquity: number
   maxDrawdownPct = 0
+  /** 每根 K 線收盤時的淨值（索引 = candleIndex），供復盤畫權益曲線 */
+  equityByCandle: number[] = []
   /** 目前這根 K 線「到目前為止」的樣子 */
   current: Candle
 
@@ -162,6 +164,7 @@ export class Game {
       this.processBracket()
     }
     const eq = this.equity
+    this.equityByCandle[this.candleIndex] = eq
     if (eq > this.peakEquity) this.peakEquity = eq
     const dd = this.peakEquity > 0 ? ((this.peakEquity - eq) / this.peakEquity) * 100 : 0
     if (dd > this.maxDrawdownPct) this.maxDrawdownPct = dd
@@ -429,6 +432,8 @@ export class Game {
     this.cancelAll()
     this.closeAll()
     const finalEquity = this.cash
+    this.equityByCandle[this.candleIndex] = finalEquity
+    const equityCurve = [this.initialCash, ...Array.from({ length: this.candleIndex + 1 }, (_, i) => this.equityByCandle[i] ?? this.initialCash)]
     const pnl = finalEquity - this.initialCash
     return {
       startEquity: this.initialCash,
@@ -439,6 +444,7 @@ export class Game {
       totalFees: this.totalFees,
       maxDrawdownPct: this.maxDrawdownPct,
       liquidated: this.liquidated,
+      equityCurve,
     }
   }
 }

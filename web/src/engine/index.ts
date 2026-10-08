@@ -12,3 +12,4 @@ export function toCandles(day: DayFile): Candle[] {
 export * from './indicators'
 export * from './bars'
 export * from './assets'
+export * from './stats'
