@@ -111,6 +111,22 @@ export const useGameStore = defineStore('game', () => {
     await recordStore?.clear()
     history.value = []
   }
+  /** 結算之後的行情（尚未播放的部分）：揭曉「如果繼續抱著會怎樣」 */
+  const afterSettle = computed(() => {
+    void version.value
+    const g = game.value
+    if (!g || phase.value !== 'settled') return null
+    const i = g.candleIndex, last = g.candles.length - 1
+    if (i >= last) return null
+    const rest = g.candles.slice(i + 1)
+    const ref = g.price
+    return {
+      candles: rest.length,
+      endPct: (g.candles[last]!.c / ref - 1) * 100,
+      highPct: (Math.max(...rest.map((c) => c.h)) / ref - 1) * 100,
+      lowPct: (Math.min(...rest.map((c) => c.l)) / ref - 1) * 100,
+    }
+  })
   /** 復盤資料：結算後才有 */
   const review = shallowRef<{ trips: RoundTrip[]; stats: TradeStats; equity: number[] } | null>(null)
   const snap = reactive<Snapshot>(emptySnap())
@@ -416,5 +432,5 @@ export const useGameStore = defineStore('game', () => {
     phase.value = 'menu'
   }
 
-  return { phase, error, notice, day, game, settlement, isDaily, speedIdx, paused, leverage, liveMode, display, isFx, leverageChoices, assetFilter, symbolFilter, symbols, isSynthetic, pool, loadIndex, snap, version, start, advance, form, edit, feed, recentTrades, fillPrice, setAmountFraction, place, applyBracket, clearBracket, dragBracket, closeAll, closePart, cancelOrder, settle, backToMenu, init, history, persistent, summary, dailyToday, clearHistory, tutorialOpen, openTutorial, closeTutorial, review, risk, maxOpen }
+  return { phase, error, notice, day, game, settlement, isDaily, speedIdx, paused, leverage, liveMode, display, isFx, leverageChoices, assetFilter, symbolFilter, symbols, isSynthetic, pool, loadIndex, snap, version, start, advance, form, edit, feed, recentTrades, fillPrice, setAmountFraction, place, applyBracket, clearBracket, dragBracket, closeAll, closePart, cancelOrder, settle, backToMenu, init, history, persistent, summary, dailyToday, clearHistory, tutorialOpen, openTutorial, closeTutorial, review, risk, maxOpen, afterSettle, todayUtc }
 })

@@ -19,6 +19,8 @@ let chart: IChartApi | null = null
 let candle: ISeriesApi<'Candlestick'> | null = null
 let volume: ISeriesApi<'Histogram'> | null = null
 let markers: ISeriesMarkersPluginApi<Time> | null = null
+/** 結算後揭曉：畫出整天的 K 線（含結算之後尚未播放的部分） */
+let revealAll = false
 let ind: Record<string, Series> = {}
 let builder = new BarBuilder(1)
 let calc = new Indicators()
@@ -187,7 +189,8 @@ function rebuild() {
   const precision = disp.value.digits ?? (disp.value.k === 1 ? 3 : g.current.c * disp.value.k >= 100 ? 2 : 4)
   candle.applyOptions({ priceFormat: { type: 'price', precision, minMove: 10 ** -precision } })
 
-  const { closed, live } = builder.update(g.candles, g.candleIndex, g.current)
+  const upto = revealAll ? g.candles.length - 1 : g.candleIndex
+  const { closed, live } = builder.update(g.candles, upto, revealAll ? g.candles[upto]! : g.current)
   const acc: Record<string, object[]> = {}
   for (const b of closed) {
     const v = calc.pushClosed(b)
@@ -198,7 +201,8 @@ function rebuild() {
   for (const [key, data] of Object.entries(acc)) ind[key]!.setData(data as never)
   drawLive(live)
   chart.timeScale().applyOptions({ barSpacing: 8 })
-  chart.timeScale().scrollToRealTime()
+  if (revealAll) chart.timeScale().fitContent()
+  else chart.timeScale().scrollToRealTime()
 }
 
 function drawLive(live: Bar) {
@@ -219,8 +223,19 @@ function drawLive(live: Bar) {
 
 // ───── 同步遊戲狀態 ─────
 function reset() {
+  revealAll = false
   lastGame = null
   rebuild()
+}
+
+/** 結算後呼叫：顯示整天走勢，並在結算位置做標記 */
+function reveal(g: Game, d?: ChartDisplay) {
+  revealAll = true
+  if (d) disp.value = d
+  lastGame = g
+  rebuild()
+  syncMarkers(g)
+  syncLines(g)
 }
 
 /** 把遊戲目前狀態畫上去（只補新增的部分） */
@@ -231,7 +246,9 @@ function sync(g: Game, d?: ChartDisplay) {
     disp.value = d
     if (changed) lastGame = null // 換算變了（新的一局）→ 整張圖重畫
   }
-  if (lastGame !== g) {
+  if (revealAll && lastGame === g) {
+    // 已揭曉：不再更新 K 線
+  } else if (lastGame !== g) {
     lastGame = g
     rebuild()
   } else {
@@ -264,6 +281,11 @@ function syncMarkers(g: Game) {
     color: t.reason === 'liquidation' ? '#ff9800' : t.side === 'buy' ? '#26a69a' : '#ef5350',
     text: REASON_TEXT[t.reason] ?? '',
   }))
+  if (revealAll) {
+    const settleT = time(Math.floor(g.candles[Math.min(g.candleIndex, g.candles.length - 1)]!.t / tf) * tf)
+    list.push({ time: settleT, position: 'inBar', shape: 'square', color: '#f5b942', text: '結算' })
+  }
+  list.sort((a, b) => (a.time as number) - (b.time as number))
   markers?.setMarkers(list)
 }
 
@@ -371,7 +393,7 @@ function onCrosshair(p: MouseEventParams<Time>) {
   })
 }
 
-defineExpose({ reset, sync })
+defineExpose({ reset, sync, reveal })
 </script>
 
 <template>

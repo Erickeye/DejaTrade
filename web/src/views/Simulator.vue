@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CandleChart from '../components/CandleChart.vue'
 import ReviewPanel from '../components/ReviewPanel.vue'
 import StatsPanel from '../components/StatsPanel.vue'
+import ShareButtons from '../components/ShareButtons.vue'
 import TutorialModal from '../components/TutorialModal.vue'
+import { buildShareData } from '../share/card'
 import { DEFAULT_TOGGLES, INDICATOR_LABELS } from '../components/chart-options'
 import { TIMEFRAMES, lotNotionalUsd, symbolLabel } from '../engine'
 import { ASSET_LABELS, SPEEDS, useGameStore } from '../stores/game'
@@ -25,7 +27,10 @@ onMounted(() => { store.loadIndex(); store.init(); last = performance.now(); raf
 onBeforeUnmount(() => cancelAnimationFrame(raf))
 
 watch(() => store.version, () => { if (store.game) chart.value?.sync(store.game, store.display) })
-watch(() => store.phase, (p) => { if (p === 'playing') chart.value?.reset() })
+watch(() => store.phase, (p) => {
+  if (p === 'playing') chart.value?.reset()
+  if (p === 'settled' && store.game) chart.value?.reveal(store.game, store.display)
+})
 watch(() => store.form.type, (t) => { if (t !== 'market') store.fillPrice() })
 
 const fmt = (n: number, d = 2) => n.toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d })
@@ -66,6 +71,17 @@ const costText = computed(() => {
   if (!g || !d) return ''
   if (d.asset === 'fx') return `價差 ${d.meta.spreadPips ?? '—'} pip，無手續費`
   return `吃單 ${pct(g.takerFeeRate)} / 掛單 ${pct(g.makerFeeRate)}，價差 ${pct(g.spreadPct)}`
+})
+
+const shareData = computed(() => {
+  const st = store.settlement, rv = store.review, d = store.day
+  if (!st || !rv || !d) return null
+  return buildShareData({
+    daily: store.isDaily, blind: !store.liveMode, label: `${symbolLabel(d.meta.symbol, d.asset)} · ${d.meta.date}`, dailyDate: store.todayUtc(),
+    leverage: store.leverage, pnl: st.pnl, pnlPct: st.pnlPct, equity: rv.equity, winRate: rv.stats.winRate, trades: rv.stats.count,
+    maxDrawdownPct: st.maxDrawdownPct, payoff: rv.stats.payoff, liquidated: st.liquidated, synthetic: !!d.meta.synthetic,
+    siteUrl: location.host + location.pathname.replace(/index\.html$/, '').replace(/\/$/, ''),
+  })
 })
 
 const REASON: Record<string, string> = { market: '市價', limit: '限價', stop: '停損單', tp: '止盈', sl: '止損', liquidation: '強平' }
@@ -260,6 +276,11 @@ const reveal = computed(() => {
             <li>交易 {{ store.settlement.trades }} 筆，手續費 {{ fmt(store.settlement.totalFees) }}</li>
             <li>最大回撤 {{ fmt(store.settlement.maxDrawdownPct) }}%</li>
           </ul>
+          <div v-if="store.afterSettle" class="after">
+            <h3>結算之後</h3>
+            <p class="small">這局還剩 {{ store.afterSettle.candles }} 分鐘行情沒播。如果繼續抱到收盤：<b :class="cls(store.afterSettle.endPct)">{{ signed(store.afterSettle.endPct) }}%</b>（最高 {{ signed(store.afterSettle.highPct) }}% / 最低 {{ signed(store.afterSettle.lowPct) }}%，相對你結算的價位）。圖上已顯示整天走勢，黃色「結算」標記是你結束的位置。</p>
+          </div>
+          <ShareButtons v-if="shareData" :data="shareData" />
           <ReviewPanel v-if="store.review" :trips="store.review.trips" :stats="store.review.stats" :equity="store.review.equity" :fmt-price="price" :size-text="sizeText" />
           <div v-if="reveal && !store.display.live" class="reveal">
             <h3>答案揭曉</h3>
@@ -274,6 +295,14 @@ const reveal = computed(() => {
         </div>
       </aside>
     </main>
+
+    <!-- 手機版：固定在底部的快速買賣列 -->
+    <div v-if="store.phase === 'playing'" class="mobilebar">
+      <div class="mb-info"><span class="dim">淨值</span> <b>{{ fmt(store.snap.equity) }}</b><br /><span class="dim">{{ store.isFx ? '手數' : '金額' }}</span> <b>{{ store.form.amount || '—' }}</b></div>
+      <button class="buy" @click="store.place('buy')">買進</button>
+      <button class="sell" @click="store.place('sell')">賣出</button>
+      <button @click="store.closePart(1)" :disabled="store.snap.qty === 0">平倉</button>
+    </div>
   </div>
 </template>
 
@@ -312,5 +341,21 @@ button.mini { padding: 1px 8px; font-size: 12px; }
 .grow { flex: 1; } button.help { padding: 3px 10px; font-size: 12px; }
 .risk { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 8px 0; line-height: 1.6; }
 .risk > div { display: flex; justify-content: space-between; gap: 8px; }
-@media (max-width: 960px) { .play { grid-template-columns: 1fr; } .chartbox { height: 520px; } }
+.after { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; } .after h3 { margin: 0 0 4px; font-size: 14px; }
+.mobilebar { display: none; }
+@media (max-width: 960px) {
+  .app { padding: 8px 8px 84px; }
+  header { flex-wrap: wrap; gap: 6px 8px; }
+  .play { grid-template-columns: 1fr; }
+  .chartbox { height: 58vh; min-height: 360px; }
+  .toolbar { flex-wrap: nowrap; overflow-x: auto; gap: 8px; } .toolbar .seg { flex-wrap: nowrap; flex: none; }
+  .seg button { padding: 6px 10px; white-space: nowrap; }
+  .menu { margin: 16px auto; }
+  .field input { font-size: 16px; } /* iOS 避免聚焦時自動放大 */
+  button { min-height: 38px; }
+  .row > button.buy, .row > button.sell { min-height: 44px; }
+  .mobilebar { display: flex; align-items: center; gap: 8px; position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); z-index: 20; }
+  .mobilebar .mb-info { flex: 1; font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+  .mobilebar button { min-height: 44px; padding: 8px 16px; }
+}
 </style>
