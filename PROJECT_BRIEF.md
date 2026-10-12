@@ -1,7 +1,7 @@
 # DejaTrade 專案規劃書（Project Brief）
 
 > 本文件整理自專案發想階段的對話（2026-10-02），供後續專案對話接續使用。
-> **版本：v2（已採用方案 A：靜態網頁 + C# 資料工具）。**
+> **版本：v2（靜態網頁；C# 資料工具已降為選配，見決策紀錄 2026-10-12）。**
 > 有新決策請直接更新本文件，作為專案的單一事實來源；重大決策同步記在「決策紀錄」。
 
 ---
@@ -104,7 +104,9 @@ DejaTrade/
 
 ---
 
-## 4. 資料管線（DejaTrade.DataTool）
+## 4. 資料管線（目前由 Node 腳本負責；C# DataTool 為選配）
+
+> 2026-10-12：公開網站的加密貨幣改由訪客瀏覽器即時抓取、外匯只放合成資料，Node 腳本（`fetch:binance`、`fetch:fx`）已涵蓋本機真實資料需求，因此 C# DataTool 不再是必要項目；僅在想展示 .NET 能力時再做（建議做成有測試與 CI 的小型專案）。以下為原規劃，供日後參考。
 
 ### 4.1 資料來源評估（2026-10-02 查證）
 
@@ -191,12 +193,12 @@ DejaTrade/
 
 ### Phase 0：專案骨架
 - [x] 建立 `web/`（Vite + Vue 3 + TS + Pinia + Vitest）
-- [ ] 建立 `tools/DejaTrade.DataTool` 與 `tests/`
+- [ ] （選配）建立 `tools/DejaTrade.DataTool` 與 `tests/`
 - [x] 設定 `.gitignore`（`data-cache/`、`node_modules/`、`bin/obj`）
 - [ ] 基本 CI（建置與測試）
 
 ### Phase 1：最小可行版本（約 1–2 個週末）
-- [ ] DataTool：Binance BTC / ETH 1 分鐘 K 線抓取 → LiteDB → 匯出 JSON（約 100 天樣本）
+- [x] 以 Node 腳本 `fetch:binance` 完成（BTC / ETH / SOL）；C# DataTool 版本為選配
 - [x] 引擎：隨機抽日、逐根播放、市價買賣、損益結算 + 單元測試（含做空、槓桿、爆倉、每日挑戰種子）
 - [x] 前端：Lightweight Charts 顯示 K 線、買賣按鈕、結算與揭曉畫面（雛型，用合成資料）
 - [ ] 部署到靜態託管，取得可分享網址
@@ -232,8 +234,8 @@ DejaTrade/
 ## 7.1 目前進度（2026-10-02）
 
 - `web/` 雛型可玩：選槓桿 → 隨機一局／今日挑戰 → 逐 tick 播放 → 買賣／平倉 → 結算並揭曉。
-- 資料暫用 `npm run gen:sample` 產生的**合成資料**（`meta.synthetic = true`），格式與 4.4 相同，之後由 C# DataTool 的真實輸出直接取代。
-- **尚未開始**：`tools/DejaTrade.DataTool`、`tests/`（開發機尚未安裝 dotnet；雛型期間的沙箱也連不上 Binance，需在自己的機器上抓資料）、CI、部署、IndexedDB 存檔。
+- 資料暫用 `npm run gen:sample` 產生的**合成資料**（`meta.synthetic = true`），格式與 4.4 相同，本機可改用 `fetch:binance` / `fetch:fx` 的真實輸出；公開網站的加密貨幣則由瀏覽器即時抓取。
+- **選配、未開始**：`tools/DejaTrade.DataTool`（C#）。**已完成**：GitHub Actions 自動部署到 GitHub Pages、IndexedDB 戰績存檔。
 
 ## 8. 決策紀錄
 
@@ -253,6 +255,8 @@ DejaTrade/
 | 2026-10-05 | 先做網頁版（GitHub Pages，Actions 自動部署）；公開站加密貨幣由訪客瀏覽器即時向 Binance `data-api.binance.vision` 抓取，外匯只放合成資料 | 資料授權限制不能附帶真實資料；Actions 內有檢查擋掉非合成外匯檔。桌面版（Electron，程式內下載題庫）列為之後選項 |
 | 2026-10-08 | 加入復盤（來回交易、勝率、盈虧比、淨值曲線）、戰績存檔（IndexedDB，失敗退回記憶體）、每日挑戰連勝、下單風險預覽與新手教學 | 讓玩家看得懂風險、有回饋、有理由回來；戰績只存在瀏覽器，不做後端。每日挑戰只有當天第一次成績算數 |
 | 2026-10-12 | 結算後揭曉整天走勢並標記結算點；成績分享圖（Canvas，1200×630）；手機版排版與底部快速買賣列 | 重播類遊戲的核心回饋是「後來怎麼了」；分享圖在盲測局與每日挑戰不寫標的與日期，避免劇透 |
+| 2026-10-12 | C# DataTool 降為選配 | Node 腳本已涵蓋資料需求；授權限制使「預先產生題庫公開散布」不可行。僅在想展示 .NET 能力時再做 |
+| 2026-10-12 | 確認公開站加密貨幣可由瀏覽器直接向 Binance 取得真實歷史資料 | 以實際網站驗證（ETH · 2023-08-10）。Binance 條款對網站使用的具體規定尚未查證 |
 
 **曾評估但未採用**：方案 B（Avalonia / WPF 桌面 App + LiteDB，全 .NET 但需下載才能玩）、方案 C（本機 ASP.NET Core 打包 Vue）、方案 D（純前端、不用 .NET）。若之後想強化 .NET 展示，可回頭評估 B。
 
